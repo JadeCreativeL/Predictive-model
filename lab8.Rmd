@@ -1,6 +1,6 @@
 ---
-title: "Lab 8-Regularization"
-author: "Chuong Bao Thy Lai - Thien Van Dinh"
+title: "Regularization"
+author: "Chuong Bao Thy Lai"
 date: "04/09/2023"
 output: pdf_document
 ---
