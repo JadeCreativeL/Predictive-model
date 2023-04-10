@@ -1,0 +1,589 @@
+---
+title: "Lab 8-Regularization"
+author: "Chuong Bao Thy Lai - Thien Van Dinh"
+date: "04/09/2023"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+library(plyr)
+library(dplyr)
+library(ggplot2)
+library(knitr)
+library(leaps)
+library(glmnet)
+library(kableExtra)
+library(corrplot)
+library(RColorBrewer)
+data <- read.csv('BCMedical.csv')
+```
+
+# 1. Introduction 
+
+Medical charges can be influenced by a range of factors, including socio-economic variables such as age, gender, bmi, the number of children, the frequency of exercise. Accurately predicting medical charges based on these variables can be a useful tool for healthcare providers, insurers, and policymakers in understanding the underlying drivers of healthcare costs and improving access to affordable care. 
+
+The purpose of this report is to create an effective model that utilizes the `BCMedical` dataset to forecast medical charges with the help of significant socio-economic factors. The study focuses on four variable selection techniques and proposes an appropriate model for the data, including: 
+
+- The best subset method 
+- Ridge Regression 
+- Lasso Regression 
+- Elastic Net Regression
+
+# 2. Data set
+
+The dataset has 1338 observations and 8 variables, the response variable is labeled as `charges` and represent the amount of money that people paid for medical. The following variables for this dataset include: 
+
+- `age`: This variable represents the age by years. 
+
+- `gender`:this is a categorical variable with two levels: male and female.
+
+- `bmi`: This variable represents the body mass index (BMI) of the individual. It is a continuous variable that is calculated by dividing the weight (in kilograms) by the square of the height (in meters).
+
+- `kids`: The number of children
+
+- `smoker`: This variable represents whether the individual is a smoker or not. It is a categorical variable with two levels: yes and no.
+
+- `exercise`: Number of days per week of exercise activity
+
+- `region`: This variable represents the region of the BC where the individual resides. It is a categorical variable with four levels: Vancouver, Mainland Interior, Cariboo, Northern BC.
+
+## 2.1. Descriptive Statistic
+
+
+
+From the table below, we can get some points that:
+
+- The minimum age in the dataset is 18 years, and the maximum is 64 years. The average age is 39.21 years. 
+- The minimum BMI is 16.00, and the maximum is 53.10, with an average of 30.67. 
+- On average, individuals have 1.095 children, with a minimum of 0 and a maximum of 5. 
+- The average frequency of exercise activity per week is 2.01, with a minimum of 0 and a maximum of 7. 
+- The medical charges range from 1122 to 63770, with an average of 13270.
+
+More importantly, our attention will be directed towards the response variable, namely 'charges', with the aim of identifying any potential issues or anomalies associated with this variable.
+
+
+```{r, warning=FALSE, echo=FALSE ,message=FALSE}
+dat <- data %>% select(where(is.numeric))
+a <- summary(dat)
+kbl(a, caption = "Description summary for numberic variables", booktabs = T)%>%
+kable_styling(latex_options = c("striped", "hold_position"))%>%column_spec(6, bold = T, color = "black")
+```
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide',fig.align='center',fig.width= 6, fig.height=3.5}
+hist(data$charges, main = "Plot 1: Charges variables distribution", xlab = "charges", col = "purple" )
+```
+
+The table and plot shows the distribution of variable `charges` skewed right. Regularized regression are sensitive to skewed respond values so we might need to transform that can improve predictive performance. We can evaluate the expectation by examining the distribution after applying a log transformation, which is depicted below and appears to follow a normal distribution.
+
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide',fig.align='center',fig.width= 6, fig.height=3.5}
+hist(log(data$charges), main = "Plot 2: Log Transformation of Charges", xlab = "log(charges)", col = "red")
+```
+
+## 2.2. Correlations
+ 
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+C <- cor(dat)
+C
+```
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide',fig.align='center',fig.width= 6, fig.height=3.5}
+corrplot(C, type = "upper", order = "hclust",
+         col=brewer.pal(n=8, name="RdYlBu"))
+```
+
+The correlation graph shows that `age` has the strongest relationship with `charge` with a coefficient of 0.3, it suggests that there is a moderately positive linear relationship between age and medical charges. This means that as age increases, medical charges tend to increase as well, although the relationship may not be perfectly linear.
+
+As there is a negative relationship between the exercise and charges, we can recommend promoting physical activity and exercise to individuals as a preventative measure to reduce the likelihood of high medical charges in the future. 
+
+```{r, warning=FALSE, fig.align='center',fig.width= 6, fig.height=3.5,echo=FALSE,message=FALSE, results='hide'}
+ggplot(data = data, aes(x=age, y = charges)) + geom_point()+ labs(title = "Plot 4: Relationship between age and charges") +
+    theme(plot.title = element_text(hjust = 0.5, size = 16),
+        plot.subtitle = element_text(hjust = 0.5, size = 14))
+```
+
+Looking at the relationship between `charges` and `age`, overall, there is a positive relationship between them, and we will discover details in the model.
+
+# 3. Analyst
+
+## 3.1 Data Spliting
+
+This report will utilize the `caret` package to split the data into training and test sets using a 70:30 ratio, with a seed of 311 to ensure reproducibility.
+
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+library(caret)
+set.seed(311)
+trainIndex <- createDataPartition(data$charges, p = .7, 
+                                   list = FALSE, 
+                                   times = 1)
+train <- data[ trainIndex,]
+test <- data[-trainIndex,]
+
+```
+
+## 3.2 Best Subset Selection 
+
+This method involves fitting all possible models using a subset of the predictor variables, and selecting the model with the best performance based on a chosen criterion, such as the lowest mean squared error or the highest R-squared value. This method can be computationally intensive, but it provides a way to systematically evaluate all possible models and identify the most important predictors.
+
+```{r, warning=FALSE, fig.align='center',fig.width= 6, fig.height=3.5, echo=FALSE,message=FALSE,include= TRUE}
+# Best subset model
+bst_ctrl <- trainControl(method = "repeatedcv", 
+                     repeats = 3,
+                     number = 10,
+                     search = "grid")
+
+set.seed(311)
+bst_subset <- train(log(charges) ~ ., 
+                    data = train, 
+                    method = "leapSeq", 
+                    trControl = bst_ctrl, 
+                    tuneGrid = expand.grid(nvmax = 1:7))
+# Get final model
+final_model <- bst_subset$finalModel
+importance_df = varImp(bst_subset)
+
+# Plot the variable importance as a bar chart
+ggplot(importance_df, aes(x = reorder(Overall, Overall), y = Overall, fill = Variable)) +
+  geom_bar(stat = "identity", color = "lightblue") +
+  theme_minimal() +
+  labs(x = "Variable", y = "Importance", fill = "Variable") +
+  ggtitle("Plot 5: Variable Importance Plot in Best Subset Model") +
+   theme(plot.title = element_text(hjust = 0.5, size = 16),
+        plot.subtitle = element_text(hjust = 0.5, size = 14))
+```
+
+Based on the output in the best subset model, it seems like the smoker variable was selected as the most important predictor in the final model, with an importance score of 100. The age and bmi variables were also important, with importance scores of 25.93 and 6.06, respectively. The kids, region, exercise, and gender variables had lower importance scores, with values of 1.26, 0.61, 0.28, and 0.00, respectively.
+
+```{r, warning=FALSE,  fig.align='center',fig.width= 6, fig.height=3.5,echo=FALSE,message=FALSE, include=TRUE}
+# Extract the training and testing RMSE values for each model size
+train_rmse <- bst_subset$results$RMSE
+test_rmse <- bst_subset$results$RMSESD # the root mean squared error standard deviation (SD) for the test set. It represents the variation of the test error across different folds and repetitions of cross-validation.
+
+# Combine the RMSE values into a data frame
+rmse_df <- data.frame(model_size = 1:length(train_rmse), 
+                      train_rmse = exp(train_rmse), 
+                      test_rmse = exp(test_rmse))
+
+# Create the plot
+ggplot(data = rmse_df, aes(x = model_size)) +
+  geom_line(aes(y = train_rmse, color = "Training RMSE")) +
+  geom_line(aes(y = test_rmse, color = "Test RMSE")) +
+  scale_color_manual(values = c("blue", "red")) +
+  labs(x = "Number of Predictors", y = "RMSE", 
+       color = "RMSE") +
+  ggtitle("Plot 6: Best Subset Model RMSE by Model Size") +
+  theme_bw()
+
+```
+
+By examining the chart, we can observe the fluctuations in the RMSE of the training set and the RMSESD (standard deviation of root mean squared error) of the test set. This indicates the variance of the test error over various cross-validation folds and repetitions. It is noticeable that there is a significant gap between the training and test errors for models with only one or two variables, whereas the model with three variables appears to be the optimal choice.
+
+The RMSE value of this model which is 9049 indicates the average difference between the predicted charges values and the actual charges values in the test set. This means that on average, the model's predicted charges values differ from the actual charges values by $9049.
+
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+bestsub.model <- regsubsets(log(charges) ~ age +
+gender + bmi + kids + smoker + exercise + region,
+data = train, nvmax = 7)
+```
+
+```{r, warning=FALSE, echo=FALSE,message=FALSE,include=TRUE}
+b <- cbind(
+Cp = summary(bestsub.model)$cp,
+r2 = summary(bestsub.model)$rsq,
+Adj_r2 = summary(bestsub.model)$adjr2,
+BIC =summary(bestsub.model)$bic
+)
+# create a data frame from the matrix b
+df_metrics <- data.frame(b)
+# create a line plot for each metric
+par(mfrow=c(2,2))
+plot(df_metrics$Cp, type="b", xlab="Number of Predictors", ylab="Cp")
+plot(df_metrics$r2, type="b", xlab="Number of Predictors", ylab="R-squared")
+plot(df_metrics$Adj_r2, type="b", xlab="Number of Predictors", ylab="Adjusted R-squared")
+plot(df_metrics$BIC, type="b", xlab="Number of Predictors", ylab="BIC")
+```
+
+
+In order to determine which model is the best, we can look at the different evaluation metrics such as Cp, r2, Adjusted $R^2$, and BIC. In general, a lower Cp and BIC value indicate a better model, while higher r2 and Adjusted $R^2$ values indicate a better fit. Based on the provided chart, the model with the lowest BIC value of -1351.6963 appears to be the best. However, we also keep in mind that different evaluation metrics. As a result, we conclude that the `model` with 4 variables which are the `smoker`, `age`, `bmi` and `kids` is the best model.
+Nonetheless, we will exam in the test set to see more details
+
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+#Fit model on entire training set with selected predictors.
+bst_fit <- lm(log(charges) ~ ., data = train[, c("smoker","age","bmi","kids","charges")])
+
+# Evaluate performance on test set using chosen metric
+bst_fit_test_pred <- exp(predict(bst_fit, newdata = test[, c("smoker","age","bmi","kids","charges")]))
+bst_fit_test_rmse <- sqrt(mean((bst_fit_test_pred - test$charges)^2))
+bst_fit_test_rsq <- summary(bst_fit)$r.squared
+bst_fittest_adj_rsq <- summary(bst_fit)$adj.r.squared
+# results
+bst_fit_test_rmse
+bst_fit_test_rsq
+bst_fittest_adj_rsq
+```
+
+
+## 3.3. Ridge Regression
+
+
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+library(olsrr)
+summary(bst_fit)
+```
+
+
+Ridge regression is a type of linear regression that adds a penalty term to the sum of squared residuals, which helps to reduce the impact of multicollinearity and overfitting. The penalty term, controlled by a tuning parameter, shrinks the coefficient estimates towards zero, leading to a more stable and generalizable model.
+
+To perform ridge regression, first we have to identify the optimal lamda value. We can use k-fold cross-validation (CV). 'glmnet::cv.glmnet()' can perform k-fold CV.
+Below we perform CV glmnet model with both a ridge and lasso penalty separately.
+
+```{r, warning=FALSE,fig.align='center',fig.width= 6, fig.height=3.5, echo=FALSE,message=FALSE, results='hide', include=TRUE}
+library(glmnet)
+set.seed(311)
+X <- model.matrix(log(charges) ~ ., data=train)[,-1]
+X
+# Define the outcome
+Y <- log(train[,"charges"])
+cv.lambda <- cv.glmnet(x=X, y=Y,
+alpha = 0,
+lambda=exp(seq(-5,8,.1)))
+# MSE for several lambdas
+plot(cv.lambda)
+cv.lambda$lambda.min
+```
+As regards to the illustration above, the first and second vertical dashed line represent the lambda value with the minimum MSE and the largest lambda value within on standard error of it.
+
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+min(cv.lambda$cvm)
+cv.lambda$lambda.min
+```
+
+```{r,fig.align='center',fig.width= 6, fig.height=3.5, echo =FALSE, message=FALSE}
+plot(cv.lambda$glmnet.fit, "lambda", label=FALSE)
+```
+
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+# ridge model
+lmin <- cv.lambda$lambda.min
+ridge.model <- glmnet(x=X, y=Y,
+alpha = 0,
+lambda = lmin)
+ridge.model$beta
+```
+
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide', include= TRUE}
+#OLS vs RIDGE
+ols.regression <- lm(charges ~ ., data=data)
+#OLS vs RIDGE
+c <- round(cbind(OLS = coef(ols.regression),
+ridge = c(ridge.model$a0, #intercept
+as.vector(ridge.model$beta))),4)
+kbl(c, caption = "Coeffiecient between OLS and Rigde", booktabs = T)
+```
+
+After choosing minimum value of lambda; as a result, comparing with the OLS,  the coefficients are similar because the penalisation was low. More specifically, Ridge regression introduces a penalty term to the OLS objective function, which controls the magnitude of the coefficients. When the penalty is low, the coefficients will be similar to those obtained from OLS regression. As the penalty increases, the coefficients will shrink towards zero, leading to a more parsimonious model that is less prone to overfitting. Therefore, the choice of the penalty parameter in ridge regression is critical to balance between bias and variance in the model.
+
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+# Make predictions on the training set
+ridge.train.pred <- predict(ridge.model, newx=X, s=lmin)
+# Calculate RMSE
+ridge.train.rmse <- sqrt(mean((exp(Y) - exp(ridge.train.pred))^2))
+# RMSE = 7756.42
+ridge.train.rmse
+# Calculate R2 = 0.7785
+ridge.train.r2 <- 1 - sum((Y - ridge.train.pred)^2) / sum((Y - mean(Y))^2)
+ridge.train.r2
+# Calculate adjusted R2 = 0.7763
+n <- nrow(X)
+p <- ncol(X)
+ridge.train.adj.r2 <- 1 - (1 - ridge.train.r2) * (n - 1) / (n - p - 1)
+ridge.train.adj.r2
+
+```
+
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+X_test <- model.matrix(log(charges) ~ ., data=test)[,-1]
+Y_test <- log(test$charges)
+# predict charges for test set
+ridge_test_pred <- predict(ridge.model, newx = X_test)
+
+# calculate RMSE for test set # 9009.295
+ridge_RMSE_test <- sqrt(mean((exp(Y_test) - exp(ridge_test_pred))^2))
+ridge_RMSE_test
+# calculate R2 for test set = 0.7420
+ridge_R2_test <- 1 - sum((Y_test - ridge_test_pred)^2)/sum((Y_test - mean(Y_test))^2)
+ridge_R2_test
+# calculate adj-R2 for test set = 0.7360
+n <- length(Y_test)
+p <- dim(X_test)[2]
+ridge_adjR2_test <- 1 - (1 - ridge_R2_test) * (n - 1) / (n - p - 1)
+ridge_adjR2_test
+```
+
+## 3.4. Lasso Regression: 
+
+Lasso regression is another type of linear regression that adds a penalty term to the sum of absolute values of the coefficient estimates. Like Ridge regression, this method helps to reduce the impact of multicollinearity and overfitting, but it has the additional advantage of performing variable selection by setting some of the coefficient estimates to zero.
+
+```{r,fig.align='center',fig.width= 6, fig.height=3.5, warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+cv.lambda.lasso <- cv.glmnet(x=X, y=Y, alpha = 1)
+# MSE for several lambdas
+plot(cv.lambda.lasso)
+```
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+# min of lambda
+min(cv.lambda.lasso$cvm)
+cv.lambda.lasso$lambda.min
+```
+
+```{r, fig.align='center',fig.width= 6, fig.height=3.5,warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+cv.lambda.lasso
+plot(cv.lambda.lasso$glmnet.fit, "lambda", label=FALSE)
+```
+
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+l.lasso.min <- cv.lambda.lasso$lambda.min
+lasso.model <- glmnet(x=X, y=Y,
+alpha = 1,
+lambda = l.lasso.min)
+lasso.model$beta
+```
+
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+# Make predictions on the training set
+lasso.train.pred <- predict(lasso.model, newx=X, s=l.lasso.min )
+# Calculate RMSE
+lasso.train.rmse <- sqrt(mean((exp(Y) - exp(lasso.train.pred))^2))
+# RMSE = 7824.467
+lasso.train.rmse
+# Calculate R2 = 0.7785
+lasso.train.r2 <- 1 - sum((Y - lasso.train.pred)^2) / sum((Y - mean(Y))^2)
+lasso.train.r2
+# Calculate adjusted R2 = 0.7763
+n <- nrow(X)
+p <- ncol(X)
+lasso.train.adj.r2 <- 1 - (1 - lasso.train.r2) * (n - 1) / (n - p - 1)
+lasso.train.adj.r2
+
+```
+
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+# predict charges for test set
+lasso_test_pred <- predict(lasso.model, newx = X_test)
+
+# calculate RMSE for test set # 9066.016
+lasso_RMSE_test <- sqrt(mean((exp(Y_test) - exp(lasso_test_pred))^2))
+lasso_RMSE_test
+# calculate R2 for test set = 0.74202
+lasso_R2_test <- 1 - sum((Y_test - lasso_test_pred)^2)/sum((Y_test - mean(Y_test))^2)
+lasso_R2_test
+# calculate adj-R2 for test set = 0.7360
+n <- length(Y_test)
+p <- dim(X_test)[2]
+lasso_adjR2_test <- 1 - (1 - lasso_R2_test) * (n - 1) / (n - p - 1)
+lasso_adjR2_test
+```
+## 3.5. Elastic Net Regression: 
+
+Elastic Net regression is a combination of Ridge and Lasso regression, which aims to balance their strengths and weaknesses. The method adds a penalty term that is a weighted combination of the L1 and L2 norms of the coefficient estimates, controlled by two tuning parameters. This method can perform both variable selection and shrinkage, and is especially useful when there are many predictor variables and the correlations between them are high.
+
+
+```{r,fig.align='center',fig.width= 6, fig.height=3.5, warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+cv.lambda.25 <- cv.glmnet(x=X, y=Y, alpha = 0.25)
+cv.lambda.50 <- cv.glmnet(x=X, y=Y, alpha = 0.50)
+cv.lambda.75 <- cv.glmnet(x=X, y=Y, alpha = 0.75)
+```
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+net1.model <- glmnet(x=X, y=Y,
+alpha = 0.25,
+lambda = cv.lambda.25$lambda.min)
+```
+
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+# predict charges for test set
+es_test_pred <- predict(net1.model, newx = X_test)
+
+# calculate RMSE for test set #  9038.492
+es_RMSE_test <- sqrt(mean((exp(Y_test) - exp(es_test_pred))^2))
+es_RMSE_test
+# calculate R2 for test set = 0.7421785
+es_R2_test <- 1 - sum((Y_test - es_test_pred)^2)/sum((Y_test - mean(Y_test))^2)
+es_R2_test
+# calculate adj-R2 for test set =  0.7362288
+n <- length(Y_test)
+p <- dim(X_test)[2]
+es_adjR2_test <- 1 - (1 - es_R2_test) * (n - 1) / (n - p - 1)
+es_adjR2_test
+```
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+net2.model <- glmnet(x=X, y=Y,
+alpha = 0.5,
+lambda = cv.lambda.50$lambda.min)
+```
+
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+# predict charges for test set
+es_test_pred <- predict(net2.model, newx = X_test)
+
+# calculate RMSE for test set # 8217.008
+es_RMSE_test <- sqrt(mean((exp(Y_test) - exp(es_test_pred))^2))
+es_RMSE_test
+# calculate R2 for test set = 0.728147
+es_R2_test <- 1 - sum((Y_test - es_test_pred)^2)/sum((Y_test - mean(Y_test))^2)
+es_R2_test
+# calculate adj-R2 for test set =  0.7218734
+n <- length(Y_test)
+p <- dim(X_test)[2]
+es_adjR2_test <- 1 - (1 - es_R2_test) * (n - 1) / (n - p - 1)
+es_adjR2_test
+```
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+net3.model <- glmnet(x=X, y=Y,
+alpha = 0.75,
+lambda = cv.lambda.75$lambda.min)
+```
+
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+# predict charges for test set
+es_test_pred <- predict(net3.model, newx = X_test)
+
+# calculate RMSE for test set # 8217.008
+es_RMSE_test <- sqrt(mean((exp(Y_test) - exp(es_test_pred))^2))
+es_RMSE_test
+# calculate R2 for test set = 0.728147
+es_R2_test <- 1 - sum((Y_test - es_test_pred)^2)/sum((Y_test - mean(Y_test))^2)
+es_R2_test
+# calculate adj-R2 for test set =  0.7218734
+n <- length(Y_test)
+p <- dim(X_test)[2]
+es_adjR2_test <- 1 - (1 - es_R2_test) * (n - 1) / (n - p - 1)
+es_adjR2_test
+```
+
+```{r,fig.align='center', warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+
+par(mfrow=c(2,2))
+
+plot(cv.lambda.25)
+cv.lambda.25$lambda.min
+min(cv.lambda.25$cvm)
+plot(cv.lambda.50)
+cv.lambda.50$lambda.min
+min(cv.lambda.50$cvm)
+
+plot(cv.lambda.75)
+cv.lambda.75$lambda.min
+min(cv.lambda.75$cvm)
+```
+
+
+
+Table: Compare MSE between different optimal lambda
+
+| Model | Ridge |Lasso|$\alpha$ = .25|$\alpha$ = .5|$\alpha$ = .75
+---|---|---|---|---|---|
+MSE |0.1995  | 0.1986|0.1991|0.1988 |0.1990
+Lambda |0.0067| 0.0013 |0.0036|0.0024|0.0017
+
+
+
+Based on the table you provided, it seems like Lasso performs slightly better than Ridge regression in terms of MSE. However, the difference in MSE between Lasso and Ridge is very small, and may not be practically significant
+
+```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+alphalist <- seq(0,1,by=0.1)
+elasticnet <- lapply(alphalist, function(a) {
+cv.glmnet(X, Y, alpha=a, lambda.min.ratio=.001)
+} )
+for (i in 1:11) print(min(elasticnet[[i]]$cvm))
+par(mfrow=c(2,2))
+plot(cv.lambda.25$glmnet.fit, "lambda", label=FALSE) #alpha=.25
+plot(cv.lambda.50$glmnet.fit, "lambda", label=FALSE) #alpha=.50
+plot(cv.lambda.75$glmnet.fit, "lambda", label=FALSE) #alpha=.75
+plot(cv.lambda$glmnet.fit, "lambda", label=FALSE) #alpha=1
+```
+
+# 4. Selection method
+
+In the context of linear regression, there are several way to selection variable and  regularization techniques is one of the most popular ways to deal with overfitting and improve the predictive performance of the model. Four methods methods are used in this report which is Ridge regression, Lasso regression, and Elastic Net with different values of alpha and Best Subset model.
+
+In this case, we have compared the performance of these methods using RMSE, $R^2$ and Adjusted $R^2$ as the evaluation metric. 
+
+Table: Compare performance between different model
+
+Model |Best subset | Ridge |Lasso|$\alpha$ = .25|$\alpha$ = .5|$\alpha$ = .75
+---|---|---|---|---|---|---
+RMSE | 8764.411 |9009.3 |9066.016|9038.49|9051.083|9064.295|
+$R^2$ | 0.7717  |0.742 |0.7420| 0.742|0.742|0.742|
+Adjusted $R^2$ |0.7708 |0.7360 |0.736| 0.736|0.736|0.736|
+
+
+
+\newpage
+
+# 5. APPENDIX
+
+Best subset
+
+```{r, warning=FALSE,message=FALSE, results='hide'}
+
+bst_fit <- lm(log(charges) ~ ., data = train[, c("smoker","age","bmi","kids","charges")])
+```
+Ridge regression
+```{r, warning=FALSE,message=FALSE, results='hide'}
+# ridge model
+lmin <- cv.lambda$lambda.min
+ridge.model <- glmnet(x=X, y=Y,
+alpha = 0,
+lambda = lmin)
+ridge.model$beta
+```
+Lasso regression
+```{r, warning=FALSE,message=FALSE, results='hide'}
+lasso.model <- glmnet(x=X, y=Y,
+alpha = 1,
+lambda = l.lasso.min)
+lasso.model$beta
+```
+
+Elastic Net
+```{r, warning=FALSE,message=FALSE, results='hide'}
+net1.model <- glmnet(x=X, y=Y,
+alpha = 0.25,
+lambda = cv.lambda.25$lambda.min)
+net2.model <- glmnet(x=X, y=Y,
+alpha = 0.5,
+lambda = cv.lambda.25$lambda.min)
+net3.model <- glmnet(x=X, y=Y,
+alpha = 0.75,
+lambda = cv.lambda.25$lambda.min)
+```
+
+Caculate RMSE, $R^2$, Adjusted $R^2$
+```{r, warning=FALSE,message=FALSE, results='hide'}
+X_test <- model.matrix(log(charges) ~ ., data=test)[,-1]
+Y_test <- log(test$charges)
+# predict charges for test set
+ridge_test_pred <- predict(ridge.model, newx = X_test)
+
+# calculate RMSE for test set # 9009.295
+ridge_RMSE_test <- sqrt(mean((exp(Y_test) - exp(ridge_test_pred))^2))
+ridge_RMSE_test
+# calculate R2 for test set = 0.7420
+ridge_R2_test <- 1 - sum((Y_test - ridge_test_pred)^2)/sum((Y_test - mean(Y_test))^2)
+ridge_R2_test
+# calculate adj-R2 for test set = 0.7360
+n <- length(Y_test)
+p <- dim(X_test)[2]
+ridge_adjR2_test <- 1 - (1 - ridge_R2_test) * (n - 1) / (n - p - 1)
+ridge_adjR2_test
+```
+
+
+```{r,echo = FALSE,warning=FALSE,message=FALSE}
+kbl(b, caption = "Statistic Compare Variables", booktabs = T) %>%
+kable_styling(latex_options = c("striped", "hold_position"))
+
+kbl(c, caption = "Coeffiecient between OLS and Rigde", booktabs = T) %>%
+kable_styling(latex_options = c("striped", "hold_position"))
+```
+
