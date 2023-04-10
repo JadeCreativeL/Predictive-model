@@ -9,7 +9,8 @@ output: pdf_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r, warning=FALSE, echo=FALSE,message=FALSE, results='hide'}
+{
+[
 library(plyr)
 library(dplyr)
 library(ggplot2)
@@ -20,7 +21,8 @@ library(kableExtra)
 library(corrplot)
 library(RColorBrewer)
 data <- read.csv('BCMedical.csv')
-```
+]
+}
 
 # 1. Introduction 
 
