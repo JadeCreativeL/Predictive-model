@@ -1,5 +1,5 @@
 ---
-title: "Lab 8-Regularization"
+title: "BC medical charges predictive models"
 author: "Chuong Bao Thy Lai"
 date: "04/09/2023"
 output: pdf_document
